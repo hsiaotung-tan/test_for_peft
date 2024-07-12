@@ -2,7 +2,7 @@ export PYTHONHASHSEED=0
 export output_dir="./mrpc"
 export CUDA_VISIBLE_DEVICES=0
 python \
-run_glue_no_trainer.py \
+run_glue.py \
 --task_name mrpc \
 --max_length 512 \
 --pad_to_max_length \
