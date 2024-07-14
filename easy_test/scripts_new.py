@@ -32,35 +32,54 @@ class BestMetricCallback(TrainerCallback):
         for key, value in self.best_metrics.items():
             print(f"{key}: {value}")
 
+
+task_to_keys = {
+    "cola": ("sentence", None),
+    "mnli": ("premise", "hypothesis"),
+    "mrpc": ("sentence1", "sentence2"),
+    "qnli": ("question", "sentence"),
+    "qqp": ("question1", "question2"),
+    "rte": ("sentence1", "sentence2"),
+    "sst2": ("sentence", None),
+    "stsb": ("sentence1", "sentence2"),
+    "wnli": ("sentence1", "sentence2"),
+}
+
+
 peft_model_name = 'roberta-base-peft'
 base_model = '/home/cver4090/Project/Pretrained/RoBERTa/base'
-
-dataset = load_dataset('/home/cver4090/Project/DATA/GLUE', 'cola')
 tokenizer = RobertaTokenizer.from_pretrained(base_model)
 
-def preprocess(examples):
-    tokenized = tokenizer(examples['sentence'], truncation=True, padding=True, max_length=512)
-    return tokenized
+datasets = load_dataset("/home/cver4090/Project/DATA/GLUE", 'cola')
+class_names = datasets["train"].features["label"].names
+label_list = datasets["train"].features["label"].names
+num_labels = len(label_list)
 
-tokenized_dataset = dataset.map(preprocess, batched=True,  remove_columns=["sentence"])
-print(tokenized_dataset)
-train_dataset=tokenized_dataset['train']
-eval_dataset=tokenized_dataset['validation'].shard(num_shards=2, index=0)
-test_dataset=tokenized_dataset['test'].shard(num_shards=2, index=1)
-
-
-# Extract the number of classess and their names
-num_labels = dataset['train'].features['label'].num_classes
-class_names = dataset["train"].features["label"].names
-print(f"number of labels: {num_labels}")
-print(f"the labels: {class_names}")
-
-# Create an id2label mapping
-# We will need this for our classifier.
 id2label = {i: label for i, label in enumerate(class_names)}
 
-data_collator = DataCollatorWithPadding(tokenizer=tokenizer, return_tensors="pt")
 
+sentence1_key, sentence2_key = task_to_keys['cola']
+padding = "max_length"
+label_to_id = None
+max_seq_length = 512
+
+def preprocess_function(examples):
+    # Tokenize the texts
+    args = (
+        (examples[sentence1_key],) if sentence2_key is None else (examples[sentence1_key], examples[sentence2_key])
+    )
+    result = tokenizer(*args, padding=True, max_length=max_seq_length, truncation=True)
+
+    # Map labels to IDs (not necessary for GLUE tasks)
+    if label_to_id is not None and "label" in examples:
+        result["label"] = [(label_to_id[l] if l != -1 else -1) for l in examples["label"]]
+    return result
+
+datasets = datasets.map(preprocess_function, batched=True)
+train_dataset = datasets["train"]
+eval_dataset = datasets["validation"]
+test_dataset = datasets["test"]
+data_collator = DataCollatorWithPadding(tokenizer, return_tensors="pt")
 # use the same Training args for all models
 training_args = TrainingArguments(
     output_dir='./results',
