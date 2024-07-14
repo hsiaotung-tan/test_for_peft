@@ -22,7 +22,7 @@ import torch
 from pathlib import Path
 
 import datasets
-from datasets import load_dataset # , load_metric
+from datasets import load_dataset
 from evaluate import load as load_metric
 from torch.utils.data.dataloader import DataLoader
 from tqdm.auto import tqdm
@@ -215,10 +215,13 @@ def main():
     # NOTE: modify model
     config = PeftConfig.from_pretrained(args.model_name_or_path)
     base_model = AutoModelForSequenceClassification.from_pretrained(config.base_model_name_or_path)
+    model = base_model
     model = PeftModel.from_pretrained(base_model, args.model_name_or_path)
     tokenizer = AutoTokenizer.from_pretrained(config.base_model_name_or_path, use_fast=not args.use_slow_tokenizer)
-
-
+    classifier_params = torch.load(args.model_name_or_path + '/classifier.pth')
+    model.load_state_dict(classifier_params, strict=False)
+    
+    
     # Preprocessing the datasets
     if args.task_name is not None:
         sentence1_key, sentence2_key = task_to_keys[args.task_name]
@@ -306,13 +309,11 @@ def main():
         model, test_dataloader
     )
 
-
-    
     # Get the metric function
     if args.task_name is not None:
         metric = load_metric("glue", args.task_name)
 
-    # Train!
+    # Test!
     total_batch_size = args.per_device_eval_batch_size * accelerator.num_processes
 
     logger.info("***** Running testing *****")
@@ -339,8 +340,8 @@ def main():
     if args.output_dir is not None:
         accelerator.wait_for_everyone()
         output_path = Path(args.output_dir)
-        with open(output_path / 'log.txt', 'w') as f:
-            f.write(f"test : {test_metric}")
+        with open(output_path / 'log.txt', 'a') as f:
+            f.write(f"seed: {args.seed}, test : {test_metric} \n")
 
     if args.task_name == "mnli":
         # Final evaluation on mismatched validation set
@@ -361,6 +362,7 @@ def main():
 
         eval_metric = metric.compute()
         logger.info(f"mnli-mm: {eval_metric}")
+        
 
 
 if __name__ == "__main__":

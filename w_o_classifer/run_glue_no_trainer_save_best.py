@@ -19,11 +19,13 @@ import math
 import os
 import random
 
+import torch
 import datasets
 from datasets import load_dataset # , load_metric
 from evaluate import load as load_metric
 from torch.utils.data.dataloader import DataLoader
 from tqdm.auto import tqdm
+from pathlib import Path
 
 from peft import VeraConfig, get_peft_model
 
@@ -116,6 +118,7 @@ def parse_args():
         default=5e-5,
         help="Initial learning rate (after the potential warmup period) to use.",
     )
+    
     parser.add_argument("--weight_decay", type=float, default=0.0, help="Weight decay to use.")
     parser.add_argument("--num_train_epochs", type=int, default=3, help="Total number of training epochs to perform.")
     parser.add_argument(
@@ -140,6 +143,9 @@ def parse_args():
     parser.add_argument(
         "--num_warmup_steps", type=int, default=0, help="Number of steps for the warmup in the lr scheduler."
     )
+    parser.add_argument(
+        "--warmup_ratio", type=float, default=0, help="Ratio for the warmup in the lr scheduler."
+    )
     parser.add_argument("--output_dir", type=str, default=None, help="Where to store the final model.")
     parser.add_argument("--seed", type=int, default=None, help="A seed for reproducible training.")
     
@@ -148,6 +154,13 @@ def parse_args():
         type=int,
         default=1024,
         help="Number of rank of VeRA.",
+    )
+
+    parser.add_argument(
+        "--per_save_freq",
+        type=int,
+        default=5,
+        help="Frequency of saving model.",
     )
     
     args = parser.parse_args()
@@ -345,25 +358,15 @@ def main():
     )
     eval_dataloader = DataLoader(eval_dataset, collate_fn=data_collator, batch_size=args.per_device_eval_batch_size)
 
-    # NOTE: Modifiy classify head to be tunnable
-    for name, param in model.named_parameters():
-        if "classifier" in name:
-            param.requires_grad = True
-
     # Optimizer
     # NOTE: modify learning rate
     # Split weights in two groups, one with weight decay and the other not.
     no_decay = ["bias", "LayerNorm.weight"]    
     optimizer_grouped_parameters = [
         {
-            "params": [p for n, p in model.named_parameters() if (not any(nd in n for nd in no_decay)) and  ("classifier" not in n)],
+            "params": [p for n, p in model.named_parameters() if (not any(nd in n for nd in no_decay))],
             "weight_decay": args.weight_decay,
             "lr": args.learning_rate
-        },
-        {
-            "params": [p for n, p in model.named_parameters() if (not any(nd in n for nd in no_decay)) and  ("classifier" in n)],
-            "weight_decay": args.weight_decay,
-            "lr": 4e-3
         },
         {
             "params": [p for n, p in model.named_parameters() if any(nd in n for nd in no_decay)],
@@ -387,13 +390,16 @@ def main():
         args.max_train_steps = args.num_train_epochs * num_update_steps_per_epoch
     else:
         args.num_train_epochs = math.ceil(args.max_train_steps / num_update_steps_per_epoch)
-
+    
+    # TODO: modify scheduler with warm up rate
+    # scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps = warm_up_ratio * args.max_train_steps, num_training_steps = total_steps)
     lr_scheduler = get_scheduler(
         name=args.lr_scheduler_type,
         optimizer=optimizer,
-        num_warmup_steps=args.num_warmup_steps,
+        num_warmup_steps=args.warmup_ratio * args.max_train_steps,
         num_training_steps=args.max_train_steps,
     )
+
 
     # Get the metric function
     if args.task_name is not None:
@@ -412,7 +418,8 @@ def main():
     # Only show the progress bar once on each machine.
     progress_bar = tqdm(range(args.max_train_steps), disable=not accelerator.is_local_main_process)
     completed_steps = 0
-
+    best_acc = 0.
+    out_dir = Path(args.output_dir)
     for epoch in range(args.num_train_epochs):
         model.train()
         for step, batch in enumerate(train_dataloader):
@@ -442,10 +449,18 @@ def main():
         eval_metric = metric.compute()
         logger.info(f"epoch {epoch}: {eval_metric}")
 
-    if args.output_dir is not None:
-        accelerator.wait_for_everyone()
-        unwrapped_model = accelerator.unwrap_model(model)
-        unwrapped_model.save_pretrained(args.output_dir, save_function=accelerator.save)
+        # per round save
+        if args.output_dir is not None and (epoch+1) % args.per_save_freq == 0:
+            accelerator.wait_for_everyone()
+            unwrapped_model = accelerator.unwrap_model(model)
+            unwrapped_model.save_pretrained(out_dir / str(epoch), save_function=accelerator.save)
+        # best save
+        if eval_metric['accuracy'] > best_acc:
+            best_acc = eval_metric['accuracy']
+            accelerator.wait_for_everyone()
+            unwrapped_model = accelerator.unwrap_model(model)
+            unwrapped_model.save_pretrained(out_dir / 'best', save_function=accelerator.save)
+
 
     if args.task_name == "mnli":
         # Final evaluation on mismatched validation set
