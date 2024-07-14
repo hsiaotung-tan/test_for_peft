@@ -329,7 +329,7 @@ def main():
             result["label"] = [(label_to_id[l] if l != -1 else -1) for l in examples["label"]]
         return result
 
-    datasets = datasets.map(preprocess_function, batched=True)
+    datasets = datasets.map(preprocess_function, batched=True, remove_columns=[sentence1_key] if sentence2_key is None else [sentence1_key, sentence2_key])
     if training_args.do_train:
         if "train" not in datasets:
             raise ValueError("--do_train requires a train dataset")
@@ -348,7 +348,7 @@ def main():
 
     # Log a few random samples from the training set:
     if training_args.do_train:
-        for index in random.sample(range(len(train_dataset)), 3):
+        for index in random.sample(range(len(train_dataset)), 1):
             logger.info(f"Sample {index} of the training set: {train_dataset[index]}.")
 
     # Get the metric function
