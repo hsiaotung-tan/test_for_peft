@@ -5,9 +5,8 @@ from datasets import load_dataset
 import numpy as np
 import evaluate
 import os
-import pdb
 
-os.environ["CUDA_LAUNCH_BLOCKING"] = "0"
+os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
 from transformers import TrainerCallback
 metric_str = "matthews_correlation"
 metric = evaluate.load(metric_str)
@@ -33,9 +32,10 @@ class BestMetricCallback(TrainerCallback):
             print(f"{key}: {value}")
 
 peft_model_name = 'roberta-base-peft'
-base_model = '/home/cver4090/Project/Pretrained/RoBERTa/base'
+base_model = 'roberta-base'
 
-dataset = load_dataset('/home/cver4090/Project/DATA/GLUE', 'cola')
+dataset = load_dataset('glue', 'cola')
+print(dataset)
 tokenizer = RobertaTokenizer.from_pretrained(base_model)
 
 def preprocess(examples):
@@ -46,7 +46,7 @@ tokenized_dataset = dataset.map(preprocess, batched=True,  remove_columns=["sent
 print(tokenized_dataset)
 train_dataset=tokenized_dataset['train']
 eval_dataset=tokenized_dataset['validation'].shard(num_shards=2, index=0)
-test_dataset=tokenized_dataset['test'].shard(num_shards=2, index=1)
+test_dataset=tokenized_dataset['validation'].shard(num_shards=2, index=1)
 
 
 # Extract the number of classess and their names
@@ -71,8 +71,8 @@ training_args = TrainingArguments(
     save_steps=10000,
     lr_scheduler_type='linear',
     warmup_ratio=0.06,
-    gradient_accumulation_steps=1,
 )
+
 
 
 def compute_metrics(eval_pred):
@@ -93,14 +93,15 @@ def get_trainer(model):
           callbacks=[BestMetricCallback()]
       )
 
+
 model = AutoModelForSequenceClassification.from_pretrained(base_model, id2label=id2label)
 
 peft_config = VeraConfig(task_type="SEQ_CLS", inference_mode=False, r=1024, target_modules=["query", "value"],)
 peft_model = get_peft_model(model, peft_config)
 
-# print('PEFT Model')
-# peft_model.print_trainable_parameters()
-# print(peft_model.peft_config)
+print('PEFT Model')
+peft_model.print_trainable_parameters()
+print(peft_model.peft_config)
 
 def print_trainable_parameters(model):
     """
@@ -116,12 +117,11 @@ def print_trainable_parameters(model):
     print(
         f"trainable params: {trainable_params-768*771-2} || all params: {all_param} || trainable%: {100 * trainable_params / all_param}"
     )
-# print_trainable_parameters(peft_model)
+print_trainable_parameters(peft_model)
 
 peft_trainer = get_trainer(peft_model)
-# print(training_args)
-# pdb.set_trace()
+
 peft_trainer.train()
-# peft_trainer.evaluate(eval_dataset=test_dataset)
+# peft_trainer.evaluate()
 
 

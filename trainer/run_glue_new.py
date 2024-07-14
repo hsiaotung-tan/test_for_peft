@@ -15,7 +15,7 @@
 # limitations under the License.
 """ Finetuning the library models for sequence classification on GLUE."""
 # You can also adapt this script on your own text classification task. Pointers for this are left as comments.
-
+import pdb
 import logging
 import os
 import random
@@ -27,11 +27,14 @@ from typing import Optional
 import numpy as np
 from datasets import load_dataset
 from evaluate import load as load_metric
+
 from peft import VeraConfig, get_peft_model
+
 import transformers
 from transformers import (
     AutoConfig,
     AutoModelForSequenceClassification,
+    RobertaTokenizer,
     AutoTokenizer,
     DataCollatorWithPadding,
     EvalPrediction,
@@ -68,17 +71,16 @@ logger = logging.getLogger(__name__)
 class DataTrainingArguments:
     """
     Arguments pertaining to what data we are going to input our model for training and eval.
-
     Using `HfArgumentParser` we can turn this class
     into argparse arguments to be able to specify them on
     the command line.
     """
     task_name: Optional[str] = field(
-        default=None,
+        default='cola',
         metadata={"help": "The name of the task to train on: " + ", ".join(task_to_keys.keys())},
     )
     max_seq_length: int = field(
-        default=512,
+        default=512, # 512 for roberta-base and 128 for roberta-large
         metadata={
             "help": "The maximum total input sequence length after tokenization. Sequences longer "
             "than this will be truncated, sequences shorter will be padded."
@@ -91,28 +93,13 @@ class DataTrainingArguments:
             "If False, will pad the samples dynamically when batching to the maximum length in the batch."
         },
     )
-    train_file: Optional[str] = field(
-        default=None, metadata={"help": "A csv or a json file containing the training data."}
-    )
-    validation_file: Optional[str] = field(
-        default=None, metadata={"help": "A csv or a json file containing the validation data."}
-    )
-    test_file: Optional[str] = field(default=None, metadata={"help": "A csv or a json file containing the test data."})
+
 
     def __post_init__(self):
         if self.task_name is not None:
             self.task_name = self.task_name.lower()
             if self.task_name not in task_to_keys.keys():
                 raise ValueError("Unknown task, you should pick one in " + ",".join(task_to_keys.keys()))
-        elif self.train_file is None or self.validation_file is None:
-            raise ValueError("Need either a GLUE task or a training/validation file.")
-        else:
-            train_extension = self.train_file.split(".")[-1]
-            assert train_extension in ["csv", "json"], "`train_file` should be a csv or a json file."
-            validation_extension = self.validation_file.split(".")[-1]
-            assert (
-                validation_extension == train_extension
-            ), "`validation_file` should have the same extension (csv or json) as `train_file`."
 
 
 @dataclass
@@ -130,18 +117,18 @@ class ModelArguments:
     tokenizer_name: Optional[str] = field(
         default=None, metadata={"help": "Pretrained tokenizer name or path if not the same as model_name"}
     )
-    rank: Optional[int] = field(
-        default=None,
-        metadata={"help": "VeRA r"},
+    use_fast_tokenizer: bool = field(
+        default=False,
+        metadata={"help": "Whether to use one of the fast tokenizer (backed by the tokenizers library) or not."},
     )
-    reg_loss_wgt: Optional[float] = field(
-        default=0.0,
-        metadata={"help": "Regularization Loss Weight"},
+    rank: int = field(
+        default=1024, # 1024 for roberta-base and 128 for roberta-large
+        metadata={
+            "help": "The parameter of the VeRA"
+        },
     )
-    masking_prob: Optional[float] = field(
-        default=0.0,
-        metadata={"help": "Token Masking Probability"},
-    )
+
+
 
     
 def main():
@@ -150,12 +137,7 @@ def main():
     # We now keep distinct sets of args, for a cleaner separation of concerns.
 
     parser = HfArgumentParser((ModelArguments, DataTrainingArguments, TrainingArguments))
-    if len(sys.argv) == 2 and sys.argv[1].endswith(".json"):
-        # If we pass only one argument to the script and it's the path to a json file,
-        # let's parse it to get our arguments.
-        model_args, data_args, training_args = parser.parse_json_file(json_file=os.path.abspath(sys.argv[1]))
-    else:
-        model_args, data_args, training_args = parser.parse_args_into_dataclasses()
+    model_args, data_args, training_args = parser.parse_args_into_dataclasses()
 
     # Setup logging
     logging.basicConfig(
@@ -164,8 +146,7 @@ def main():
         handlers=[logging.StreamHandler(sys.stdout)],
     )
     logger.setLevel(logging.INFO if is_main_process(training_args.local_rank) else logging.WARN)
-    
-    # NOTE: distrubuted logging and setting
+
     # Log on each process the small summary:
     # logger.warning(
     #     f"Process rank: {training_args.local_rank}, device: {training_args.device}, n_gpu: {training_args.n_gpu}"
@@ -181,48 +162,13 @@ def main():
     # Set seed before initializing model.
     set_seed(training_args.seed)
 
-    # Get the datasets: you can either provide your own CSV/JSON training and evaluation files (see below)
-    # or specify a GLUE benchmark task (the dataset will be downloaded automatically from the datasets Hub).
-    #
-    # For CSV/JSON files, this script will use as labels the column called 'label' and as pair of sentences the
-    # sentences in columns called 'sentence1' and 'sentence2' if such column exists or the first two columns not named
-    # label if at least two columns are provided.
-    #
-    # If the CSVs/JSONs contain only one non-label column, the script does single sentence classification on this
-    # single column. You can easily tweak this behavior (see below)
+    # Specify a GLUE benchmark task (the dataset will be downloaded automatically from the datasets Hub).
     #
     # In distributed training, the load_dataset function guarantee that only one local process can concurrently
     # download the dataset.
     if data_args.task_name is not None:
         # Downloading and loading a dataset from the hub.
         datasets = load_dataset("/home/cver4090/Project/DATA/GLUE", data_args.task_name)
-    else:
-        # Loading a dataset from your local files.
-        # CSV/JSON training and evaluation files are needed.
-        data_files = {"train": data_args.train_file, "validation": data_args.validation_file}
-
-        # Get the test dataset: you can provide your own CSV/JSON test file (see below)
-        # when you use `do_predict` without specifying a GLUE benchmark task.
-        if training_args.do_predict:
-            if data_args.test_file is not None:
-                train_extension = data_args.train_file.split(".")[-1]
-                test_extension = data_args.test_file.split(".")[-1]
-                assert (
-                    test_extension == train_extension
-                ), "`test_file` should have the same extension (csv or json) as `train_file`."
-                data_files["test"] = data_args.test_file
-            else:
-                raise ValueError("Need either a GLUE task or a test file for `do_predict`.")
-
-        for key in data_files.keys():
-            logger.info(f"load a local file for {key}: {data_files[key]}")
-
-        if data_args.train_file.endswith(".csv"):
-            # Loading a dataset from local csv files
-            datasets = load_dataset("csv", data_files=data_files)
-        else:
-            # Loading a dataset from local json files
-            datasets = load_dataset("json", data_files=data_files)
     # See more about loading any type of standard or custom dataset at
     # https://huggingface.co/docs/datasets/loading_datasets.html.
 
@@ -234,17 +180,6 @@ def main():
             num_labels = len(label_list)
         else:
             num_labels = 1
-    else:
-        # Trying to have good defaults here, don't hesitate to tweak to your needs.
-        is_regression = datasets["train"].features["label"].dtype in ["float32", "float64"]
-        if is_regression:
-            num_labels = 1
-        else:
-            # A useful fast method:
-            # https://huggingface.co/docs/datasets/package_reference/main_classes.html#datasets.Dataset.unique
-            label_list = datasets["train"].unique("label")
-            label_list.sort()  # Let's sort it for determinism
-            num_labels = len(label_list)
 
     # Load pretrained model and tokenizer
     #
@@ -255,9 +190,13 @@ def main():
         num_labels=num_labels,
         finetuning_task=data_args.task_name,
     )
+
+    
     tokenizer = AutoTokenizer.from_pretrained(
         model_args.tokenizer_name if model_args.tokenizer_name else model_args.model_name_or_path,
+        use_fast=model_args.use_fast_tokenizer,
     )
+    # TODO: understand the relationship between num_labels and initialization 
     base_model = AutoModelForSequenceClassification.from_pretrained(
         model_args.model_name_or_path,
         from_tf=bool(".ckpt" in model_args.model_name_or_path),
@@ -267,7 +206,7 @@ def main():
     peft_config = VeraConfig(task_type="SEQ_CLS", inference_mode=False, r=model_args.rank)
     model = get_peft_model(base_model, peft_config)
     model.print_trainable_parameters()
-
+    # pdb.set_trace()
     
     # Preprocessing the datasets
     if data_args.task_name is not None:
@@ -285,7 +224,7 @@ def main():
 
     # Padding strategy
     if data_args.pad_to_max_length:
-        padding = True
+        padding = "max_length"
     else:
         # We will pad later, dynamically at batch creation, to the max sequence length in each batch
         padding = False
@@ -340,15 +279,14 @@ def main():
             raise ValueError("--do_eval requires a validation dataset")
         eval_dataset = datasets["validation_matched" if data_args.task_name == "mnli" else "validation"]
 
-
-    if training_args.do_predict or data_args.task_name is not None or data_args.test_file is not None:
+    if training_args.do_predict or data_args.task_name is not None:
         if "test" not in datasets and "test_matched" not in datasets:
             raise ValueError("--do_predict requires a test dataset")
         test_dataset = datasets["test_matched" if data_args.task_name == "mnli" else "test"]
-
+        
     # Log a few random samples from the training set:
     if training_args.do_train:
-        for index in random.sample(range(len(train_dataset)), 3):
+        for index in random.sample(range(len(train_dataset)), 1):
             logger.info(f"Sample {index} of the training set: {train_dataset[index]}.")
 
     # Get the metric function
@@ -374,31 +312,47 @@ def main():
 
     # Data collator will default to DataCollatorWithPadding, so we change it if we already did the padding.
     if data_args.pad_to_max_length:
-        data_collator = DataCollatorWithPadding(tokenizer=tokenizer, return_tensors="pt")
+        data_collator = DataCollatorWithPadding(tokenizer, return_tensors="pt")
     elif training_args.fp16:
         data_collator = DataCollatorWithPadding(tokenizer, pad_to_multiple_of=8)
     else:
         data_collator = None
 
     # Initialize our Trainer
+    training_args = TrainingArguments(
+        output_dir='./results',
+        eval_strategy='epoch',
+        learning_rate=1e-2,
+        num_train_epochs=80,
+        per_device_train_batch_size=64,
+        save_steps=10000,
+        lr_scheduler_type='linear',
+        warmup_ratio=0.06,
+        gradient_accumulation_steps=1,
+    )
+
+
     trainer = Trainer(
         model=model,
         args=training_args,
-        train_dataset=train_dataset if training_args.do_train else None,
+        train_dataset=train_dataset, # if training_args.do_train else None,
         eval_dataset=eval_dataset if training_args.do_eval else None,
         compute_metrics=compute_metrics,
         tokenizer=tokenizer,
         data_collator=data_collator,
     )
+    
 
+    # pdb.set_trace()
     # Training
-    if training_args.do_train:
+    # print(training_args.do_train)
+    if training_args.do_train or True:
+
         train_result = trainer.train()
         metrics = train_result.metrics
-        metrics["train_samples"] = len(train_dataset)
+        metrics["train_samples"] = len(train_dataset) 
 
         trainer.save_model()  # Saves the tokenizer too for easy upload
-
         trainer.log_metrics("train", metrics)
         trainer.save_metrics("train", metrics)
         trainer.save_state()
@@ -417,7 +371,8 @@ def main():
         for eval_dataset, task in zip(eval_datasets, tasks):
             metrics = trainer.evaluate(eval_dataset=eval_dataset)
 
-            metrics["eval_samples"] = len(eval_dataset)
+            max_val_samples = data_args.max_val_samples if data_args.max_val_samples is not None else len(eval_dataset)
+            metrics["eval_samples"] = min(max_val_samples, len(eval_dataset))
 
             trainer.log_metrics("eval", metrics)
             trainer.save_metrics("eval", metrics)
