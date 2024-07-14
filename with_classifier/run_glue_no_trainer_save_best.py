@@ -228,7 +228,7 @@ def main():
     # download the dataset.
     if args.task_name is not None:
         # Downloading and loading a dataset from the hub.
-        raw_datasets = load_dataset("glue", args.task_name)
+        raw_datasets = load_dataset("/home/cver4090/Project/DATA/GLUE", args.task_name)
     else:
         # Loading the dataset from local csv or json file.
         data_files = {}

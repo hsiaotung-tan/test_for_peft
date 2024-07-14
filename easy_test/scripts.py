@@ -32,9 +32,9 @@ class BestMetricCallback(TrainerCallback):
             print(f"{key}: {value}")
 
 peft_model_name = 'roberta-base-peft'
-base_model = '/home/tanxiaodong/Project/LLM/Pretrained/RoBERTa/base'
+base_model = '/home/cver4090/Project/Pretrained/RoBERTa/base'
 
-dataset = load_dataset('glue', 'cola')
+dataset = load_dataset('/home/cver4090/Project/DATA/GLUE', 'cola')
 print(dataset)
 tokenizer = RobertaTokenizer.from_pretrained(base_model)
 
