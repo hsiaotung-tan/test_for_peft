@@ -322,6 +322,10 @@ def main():
         args = (
             (examples[sentence1_key],) if sentence2_key is None else (examples[sentence1_key], examples[sentence2_key])
         )
+        # specify the max_seq_length has two functions:
+        # 1. if `truncation == True` then all sentences longer than max_seq_length will be truncated to  max_seq_length.
+        # 2  if `padding == 'max_length'` then all sentence will padded to max_seq_length, and 
+        #    if `padding == True` then sentence will padded to the max length inside a single batch.
         result = tokenizer(*args, padding=padding, max_length=max_seq_length, truncation=True)
 
         # Map labels to IDs (not necessary for GLUE tasks)
@@ -330,6 +334,7 @@ def main():
         return result
 
     datasets = datasets.map(preprocess_function, batched=True, remove_columns=[sentence1_key] if sentence2_key is None else [sentence1_key, sentence2_key])
+    
     if training_args.do_train:
         if "train" not in datasets:
             raise ValueError("--do_train requires a train dataset")
@@ -436,26 +441,26 @@ def main():
             # Removing the `label` columns because it contains -1 and Trainer won't like that.
             # test_dataset.remove_columns_("label")
 
-            metrics = trainer.evaluate(eval_dataset=test_datasets)
-            metrics["test_samples"] = len(test_datasets)
+            # metrics = trainer.evaluate(eval_dataset=test_dataset)
+            # metrics["test_samples"] = len(test_dataset)
 
-            trainer.log_metrics("test", metrics)
-            trainer.save_metrics("test", metrics)
+            # trainer.log_metrics("test", metrics)
+            # trainer.save_metrics("test", metrics)
 
-            # predictions = trainer.predict(test_dataset=test_dataset).predictions
-            # predictions = np.squeeze(predictions) if is_regression else np.argmax(predictions, axis=1)
+            predictions = trainer.predict(test_dataset=test_dataset).predictions
+            predictions = np.squeeze(predictions) if is_regression else np.argmax(predictions, axis=1)
 
-            # output_test_file = os.path.join(training_args.output_dir, f"test_results_{task}.txt")
-            # if trainer.is_world_process_zero():
-            #     with open(output_test_file, "w") as writer:
-            #         logger.info(f"***** Test results {task} *****")
-            #         writer.write("index\tprediction\n")
-            #         for index, item in enumerate(predictions):
-            #             if is_regression:
-            #                 writer.write(f"{index}\t{item:3.3f}\n")
-            #             else:
-            #                 item = label_list[item]
-            #                 writer.write(f"{index}\t{item}\n")
+            output_test_file = os.path.join(training_args.output_dir, f"test_results_{task}.txt")
+            if trainer.is_world_process_zero():
+                with open(output_test_file, "w") as writer:
+                    logger.info(f"***** Test results {task} *****")
+                    writer.write("index\tprediction\n")
+                    for index, item in enumerate(predictions):
+                        if is_regression:
+                            writer.write(f"{index}\t{item:3.3f}\n")
+                        else:
+                            item = label_list[item]
+                            writer.write(f"{index}\t{item}\n")
 
 
 def _mp_fn(index):

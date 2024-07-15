@@ -33,8 +33,9 @@ class BestMetricCallback(TrainerCallback):
 
 peft_model_name = 'roberta-base-peft'
 base_model = 'roberta-base'
+# base_model = '/home/cver4090/Project/Pretrained/RoBERTa/base'
 
-dataset = load_dataset('glue', 'cola')
+dataset = load_dataset('/home/cver4090/Project/DATA/GLUE', 'cola')
 print(dataset)
 tokenizer = RobertaTokenizer.from_pretrained(base_model)
 
@@ -45,6 +46,7 @@ def preprocess(examples):
 tokenized_dataset = dataset.map(preprocess, batched=True,  remove_columns=["sentence"])
 print(tokenized_dataset)
 train_dataset=tokenized_dataset['train']
+# NOTE: why use the same data
 eval_dataset=tokenized_dataset['validation'].shard(num_shards=2, index=0)
 test_dataset=tokenized_dataset['validation'].shard(num_shards=2, index=1)
 
@@ -64,7 +66,7 @@ data_collator = DataCollatorWithPadding(tokenizer=tokenizer, return_tensors="pt"
 # use the same Training args for all models
 training_args = TrainingArguments(
     output_dir='./results',
-    evaluation_strategy='epoch',
+    eval_strategy='epoch',
     learning_rate=1e-2,
     num_train_epochs=80,
     per_device_train_batch_size=64,
@@ -117,11 +119,12 @@ def print_trainable_parameters(model):
     print(
         f"trainable params: {trainable_params-768*771-2} || all params: {all_param} || trainable%: {100 * trainable_params / all_param}"
     )
+    
 print_trainable_parameters(peft_model)
 
-peft_trainer = get_trainer(peft_model)
+# peft_trainer = get_trainer(peft_model)
 
-peft_trainer.train()
+# peft_trainer.train()
 # peft_trainer.evaluate()
 
 
