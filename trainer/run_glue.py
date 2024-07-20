@@ -439,7 +439,7 @@ def main():
 
         for test_dataset, task in zip(test_datasets, tasks):
             # Removing the `label` columns because it contains -1 and Trainer won't like that.
-            # test_dataset.remove_columns_("label")
+            test_dataset.remove_columns_("label")
 
             # metrics = trainer.evaluate(eval_dataset=test_dataset)
             # metrics["test_samples"] = len(test_dataset)
